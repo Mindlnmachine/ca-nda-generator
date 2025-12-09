@@ -1,7 +1,5 @@
 # ca-nda-generator
 
-# ca-nda-generator
-
 This project is a web application designed to simplify the generation of Non-Disclosure Agreements (NDAs), specifically tailored for Chartered Accountancy firms. It allows users to fill in various details for Party A (including CA Firm details) and Party B, select Party A information from a pre-defined list, and generate a dynamic NDA based on a customizable template. The filled agreement details are logged for record-keeping.
 
 ## Features
