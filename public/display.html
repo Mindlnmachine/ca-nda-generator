@@ -1,0 +1,490 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+<title>Saved Data Preview</title>
+
+<style>
+body{
+    font-family:"Times New Roman", Times, serif;
+    background:#f0f2f5;
+    margin:0;
+    padding:20px;
+    display:flex;
+    justify-content:center;
+}
+
+.container{
+    background:#fff;
+    padding:30px;
+    width:90%;
+    max-width:800px;
+    border-radius:8px;
+    box-shadow:0 4px 15px rgba(0,0,0,0.1);
+    text-align:center;
+}
+
+.preview{
+    margin-top:20px;
+    padding:20px;
+    border:1px solid #ddd;
+    white-space:pre-wrap;
+    line-height:1.6;
+    text-align:left;
+}
+
+button{
+    margin:10px 5px;
+    padding:10px 20px;
+    background:#28a745;
+    color:#fff;
+    border:none;
+    border-radius:6px;
+    cursor:pointer;
+}
+button:hover{ background:#218838; }
+
+a{display:block; margin-top:10px;}
+</style>
+</head>
+
+<body>
+<div class="container">
+  <h2>Recently Saved Data</h2>
+  <p id="loadingTxt">Loading...</p>
+  <p id="errorTxt" style="color:red;"></p>
+
+  <div id="previewArea"></div>
+
+  <button id="pdfBtn">Download PDF</button>
+  <button id="docBtn">Download DOC</button>
+  <a href="/profile.html">Back to Profile</a>
+</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+
+<script>
+
+let template = "";
+let storedValues = {};
+
+// UPDATED: Add new headers for CA Firm details
+const headers = [
+  "Timestamp","User Email","Date",
+  "Company Name A","LLPIN","Address A",
+  "CA FIRM NAME", "CA NAME", "MEMBER REG NO", "PARTNER/PROPRIETOR",
+  "Company Name B","CIN","Address B" // <<< ENSURE THESE ARE PRESENT AND SPELLED EXACTLY
+];
+
+// ========== LOAD TEMPLATE ==========
+async function loadTemplate() {
+  try {
+    const res = await fetch('/sample.txt');
+    template = await res.text();
+    console.log("Template loaded:", template);  // Debug: Log template content
+  } catch {
+    document.getElementById("errorTxt").innerText = "Template not found.";
+  }
+}
+
+// ========== FILL TEMPLATE ==========
+function fillTemplate(template, data){
+  let result = template;
+
+  console.log("Raw data from API:", data);  // Debug: Log raw API data
+
+  // Manual mapping for common API key variations (customize based on your API)
+  const keyMapping = {
+    "timestamp": "Timestamp",
+    "user_email": "User Email",
+    "userEmail": "User Email",
+    "date": "Date",
+    "companyNameA": "Company Name A",
+    "company_name_a": "Company Name A",
+    "llpin": "LLPIN",
+    "addressA": "Address A",
+    "address_a": "Address A",
+    // NEW MAPPINGS for CA Firm details
+    "caFirmName": "CA FIRM NAME",
+    "caName": "CA NAME",
+    "memberRegNo": "MEMBER REG NO",
+    "partnerProprietor": "PARTNER/PROPRIETOR",
+    // END NEW MAPPINGS
+    "companyNameB": "Company Name B",
+    "company_name_b": "Company Name B",
+    "cin": "CIN", // <<< ENSURE THIS IS PRESENT
+    "addressB": "Address B", // <<< ENSURE THIS IS PRESENT
+    "address_b": "Address B"
+    // Add more if needed, e.g., "effective_date": "Date"
+  };
+
+  // Normalize data keys to match headers
+  const normalizedData = {};
+  Object.keys(data).forEach(key => {
+    let mappedKey = keyMapping[key];  // Check manual mapping first
+    if (!mappedKey) {
+      // Fallback normalization: remove spaces/underscores, lowercase
+      const normalizedKey = key.replace(/[\s_]+/g, '').toLowerCase();
+      mappedKey = headers.find(h => h.replace(/[\s_]+/g, '').toLowerCase() === normalizedKey);
+    }
+    if (mappedKey) {
+      normalizedData[mappedKey] = data[key];
+      console.log(`Mapped API key '${key}' to header '${mappedKey}' with value: ${data[key]}`);  // Debug
+    } else {
+      normalizedData[key] = data[key];  // Keep unmapped as-is
+      console.warn(`No header match for API key: ${key}. Add to keyMapping if needed.`);  // Debug
+    }
+  });
+
+  console.log("Normalized data:", normalizedData);  // Debug
+
+  // Helper to format Date values as date-only (strip time)
+  function formatDateOnly(val) {
+    if (!val) return "";
+    // If it's a date string from Excel (ISO or with time)
+    if (typeof val === 'string') {
+      // Check if it's an ISO date with time (e.g., "2025-12-08T15:30:00Z")
+      const match = val.match(/^(\d{4})-(\d{2})-(\d{2})/);
+      if (match) return match[0]; // Return just YYYY-MM-DD
+      // If it's already just a date (e.g., "2025-12-08" or "08-12-2025"), return as-is
+      return val;
+    }
+    // If it's a JS Date object, format as YYYY-MM-DD or dd-mm-yyyy depending on preference
+    if (val instanceof Date) {
+      const y = val.getFullYear();
+      const m = String(val.getMonth() + 1).padStart(2, '0');
+      const d = String(val.getDate()).padStart(2, '0');
+      return `${y}-${m}-${d}`;
+    }
+    return String(val);
+  }
+
+  headers.forEach(h => {
+    let rawValue = normalizedData[h] || "";
+    // Format Date header to strip time
+    const displayValue = (h === 'Date' || h === 'Timestamp') ? formatDateOnly(rawValue) : rawValue;
+    storedValues[h] = displayValue;
+    const value = displayValue;
+    
+    // Try multiple regex patterns
+    const patterns = [
+      new RegExp(`{{${h}}}`, 'gi'),  // Exact (e.g., {{Date}})
+      new RegExp(`{{${h.replace(/\s+/g, '')}}}`, 'gi'),  // No spaces (e.g., {{CompanyNameA}})
+      new RegExp(`{{${h.replace(/\s+/g, '\\s*')}}`, 'gi')  // Optional spaces (e.g., {{Company\s*Name\s*A}})
+    ];
+    
+    let replaced = false;
+    for (let regex of patterns) {
+      if (regex.test(result)) {
+        result = result.replace(regex, `<strong>${value}</strong>`);
+        console.log(`Replaced {{${h}}} with: ${value}`);  // Debug
+        replaced = true;
+        break;
+      }
+    }
+    if (!replaced) {
+      console.warn(`No replacement for header: ${h}. Placeholder not in template or value empty.`);  // Debug
+    }
+  });
+
+  return result;
+}
+
+// ========== SHOW DATA ==========
+async function showData(){
+  await loadTemplate();
+
+  try{
+    const res = await fetch('/api/get-last-excel-entry');
+    const data = await res.json();
+
+    if(!data.row){
+      document.getElementById('errorTxt').innerText = "No data found.";
+      return;
+    }
+
+    let html = fillTemplate(template, data.row);
+
+    const box = document.createElement("div");
+    box.className = "preview";
+    box.innerHTML = html;
+
+    document.getElementById("previewArea").appendChild(box);
+    document.getElementById("loadingTxt").style.display = "none";
+
+  } catch(err){
+    document.getElementById("errorTxt").innerText = "Could not load data.";
+  }
+}
+
+document.addEventListener("DOMContentLoaded", showData);
+
+// ===================== TOKENIZE =====================
+function tokenizeLine(line, lineBold, dataValues){
+
+  let segments = [];
+
+  const values = Object.values(dataValues)
+    .filter(v => v && line.includes(v))
+    .map(v => v.replace(/([.*+?^=!:${}()|\[\]\/\\])/g,"\\$1"));
+
+  if(values.length === 0){
+    line.split(/(\s+)/).forEach(w=>{
+      if(w) segments.push({text:w, bold:lineBold});
+    });
+    return segments;
+  }
+
+  const regex = new RegExp("(" + values.join("|") + ")", "g");
+  let last = 0, match;
+
+  while((match = regex.exec(line)) !== null){
+
+    if(match.index > last){
+      line.substring(last, match.index).split(/(\s+)/)
+      .forEach(w=> w && segments.push({text:w, bold:lineBold}));
+    }
+
+    match[0].split(/(\s+)/)
+    .forEach(w=> w && segments.push({text:w, bold:true}));
+
+    last = regex.lastIndex;
+  }
+
+  if(last < line.length){
+    line.substring(last).split(/(\s+)/)
+    .forEach(w=> w && segments.push({text:w, bold:lineBold}));
+  }
+
+  return segments;
+}
+
+function wrapSegments(tokens, maxWidth, doc, fontSize, scale){
+
+  let finalLines = [], current = [], currentW = 0;
+
+  for(let t of tokens){
+
+    doc.setFont("Times", t.bold ? "bold" : "normal");
+    const w = doc.getStringUnitWidth(t.text) * fontSize / scale;
+
+    if(currentW + w <= maxWidth){
+      current.push(t);
+      currentW += w;
+    } else {
+      while(current.length && /\s+/.test(current[current.length-1].text)) current.pop();
+      if(current.length) finalLines.push(current);
+
+      current = /\s+/.test(t.text) ? [] : [t];
+      currentW = /\s+/.test(t.text) ? 0 : w;
+    }
+  }
+
+  while(current.length && /\s+/.test(current[current.length-1].text)) current.pop();
+  if(current.length) finalLines.push(current);
+
+  return finalLines;
+}
+
+// Function to justify text by adding extra space between words
+function justifyLine(tokens, maxWidth, doc, fontSize, scale) {
+  if (tokens.length <= 1) return tokens; // No justification needed for single word or less
+
+  let totalWidth = 0;
+  let spaceCount = 0;
+  tokens.forEach(t => {
+    doc.setFont("Times", t.bold ? "bold" : "normal");
+    totalWidth += doc.getStringUnitWidth(t.text) * fontSize / scale;
+    if (/\s+/.test(t.text)) spaceCount++;
+  });
+
+  if (spaceCount === 0 || totalWidth >= maxWidth) return tokens; // No spaces or already fits
+
+  const extraSpace = (maxWidth - totalWidth) / spaceCount;
+  const adjustedTokens = [];
+  tokens.forEach(t => {
+    adjustedTokens.push(t);
+    if (/\s+/.test(t.text)) {
+      // Add extra width to spaces
+      adjustedTokens.push({ text: '', bold: false, extraWidth: extraSpace });
+    }
+  });
+
+  return adjustedTokens;
+}
+
+// ===================== PDF =====================
+document.getElementById("pdfBtn").onclick = () => {
+
+  const content = document.querySelector(".preview");
+  if(!content) return alert("No content");
+
+  const { jsPDF } = window.jspdf;
+  const doc = new jsPDF("p","mm","a4");
+
+  const pageW = doc.internal.pageSize.width;
+  const pageH = doc.internal.pageSize.height;
+
+  const margin = 20;
+  const contentW = pageW - margin * 2;
+
+  let y = margin;
+
+  const fontSize = 11;
+  const lineHeight = 7.5;
+  const scale = doc.internal.scaleFactor;
+
+  doc.setFont("Times","normal");
+  doc.setFontSize(fontSize);
+
+  // Border removed as requested
+  // function border(){
+  //   doc.setLineWidth(0.5);
+  //   doc.rect(15, 15, pageW-30, pageH-30);
+  // }
+  // border();
+
+  // Function to extract styled lines with tokens preserving bold and center
+  function extractStyledLines(element) {
+    let lines = [];
+    let currentLine = [];
+    let currentBold = false;
+    let currentCenter = false;
+
+    function traverse(node) {
+      if (node.nodeType === Node.TEXT_NODE) {
+        const text = node.textContent;
+        const parts = text.split('\n');
+        for (let i = 0; i < parts.length; i++) {
+          if (i > 0) {
+            lines.push({ tokens: currentLine, center: currentCenter });
+            currentLine = [];
+          }
+          if (parts[i]) {
+            parts[i].split(/(\s+)/).forEach(w => {
+              if (w) currentLine.push({ text: w, bold: currentBold });
+            });
+          }
+        }
+      } else if (node.nodeType === Node.ELEMENT_NODE) {
+        const tag = node.tagName.toLowerCase();
+        let newBold = currentBold;
+        let newCenter = currentCenter;
+        if (tag === 'strong' || tag === 'b') {
+          newBold = true;
+        } else if (tag === 'h3') {
+          newBold = true; // <h3> is bold by default
+          newCenter = true;
+        }
+        const prevBold = currentBold;
+        const prevCenter = currentCenter;
+        currentBold = newBold;
+        currentCenter = newCenter;
+        for (let child of node.childNodes) {
+          traverse(child);
+        }
+        // Push the line for <h3> with center: true before resetting
+        if (tag === 'h3' && currentLine.length) {
+          lines.push({ tokens: currentLine, center: true });
+          currentLine = [];
+        }
+        currentBold = prevBold;
+        currentCenter = prevCenter;
+      }
+    }
+
+    traverse(element);
+    if (currentLine.length) lines.push({ tokens: currentLine, center: currentCenter });
+    return lines;
+  }
+
+  const styledLines = extractStyledLines(content);
+
+  for (let styledLine of styledLines) {
+    if (!styledLine.tokens.length) {
+      y += 4;
+      continue;
+    }
+
+    if (y + lineHeight > pageH - margin) {
+      doc.addPage();
+      // border(); // Removed
+      y = margin;
+    }
+
+    if (styledLine.center) {
+      // For centered lines (<h3>), render with larger font size to match HTML <h3> appearance
+      doc.setFontSize(14);
+      doc.setFont("Times", "bold");
+      const lineText = styledLine.tokens.map(t => t.text).join('');
+      const parts = doc.splitTextToSize(lineText, contentW);
+      parts.forEach(p => {
+        if (y + 9 > pageH - margin) { // Adjusted line height for larger font
+          doc.addPage();
+          // border(); // Removed
+          y = margin;
+        }
+        doc.text(p, pageW / 2, y, { align: "center" });
+        y += 9; // Adjusted line height
+      });
+      // Reset font size after centered text
+      doc.setFontSize(fontSize);
+    } else {
+      const wrapped = wrapSegments(styledLine.tokens, contentW, doc, fontSize, scale);
+
+      wrapped.forEach(lineTokens => {
+        if (y + lineHeight > pageH - margin) {
+          doc.addPage();
+          // border(); // Removed
+          y = margin;
+        }
+
+        // Justify the line
+        // const justifiedTokens = justifyLine(lineTokens, contentW, doc, fontSize, scale);
+
+        let x = margin;
+        for (let t of lineTokens) {
+          doc.setFont("Times", t.bold ? "bold" : "normal");
+          doc.text(t.text, x, y);
+          x += doc.getStringUnitWidth(t.text) * fontSize / scale + (t.extraWidth || 0);
+        }
+        y += lineHeight;
+      });
+    }
+  }
+
+  doc.save("saved-data.pdf");
+};
+
+// ===================== DOC =====================
+document.getElementById("docBtn").onclick = () => {
+
+  const content = document.querySelector(".preview");
+  if(!content) return alert("No content");
+
+  // Include styles to match the preview exactly, with text justified
+  const styles = `
+    <style>
+      body { font-family: "Times New Roman", Times, serif; }
+      .preview { white-space: pre-wrap; line-height: 1.6; text-align: left; }
+      strong, b { font-weight: bold; }
+      h3 { font-size: 1.17em; font-weight: bold; margin: 1em 0; text-align: center; }
+    </style>
+  `;
+
+  // Replace \n with <br> to ensure line breaks are preserved in Word
+  let htmlContent = content.innerHTML.replace(/\n/g, '<br>');
+
+  const html = `<html><head>${styles}</head><body><div class="preview">${htmlContent}</div></body></html>`;
+  const blob = new Blob(['\ufeff', html], { type: 'application/msword' });
+
+  const link = document.createElement("a");
+  link.href = URL.createObjectURL(blob);
+  link.download = "saved-data.doc";
+  link.click();
+};
+
+</script>
+</body>
+</html>
